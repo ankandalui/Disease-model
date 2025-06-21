@@ -41,11 +41,25 @@ except Exception as e:
 
 # Load the model
 try:
-    model = load_model('best_model.keras')
-    print("Model loaded successfully!")
+    # Try loading with compile=False to avoid compatibility issues
+    model = load_model('best_model.keras', compile=False)
+    
+    # Manually compile the model for inference
+    if model is not None:
+        model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+        print("Model loaded and compiled successfully!")
+    
 except Exception as e:
-    print(f"Error loading model: {e}")
-    model = None
+    print(f"Error loading model with compile=False: {e}")
+    try:
+        # Fallback: try with custom_objects and safe_mode
+        model = load_model('best_model.keras', compile=False, safe_mode=False)
+        if model is not None:
+            model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+            print("Model loaded successfully with safe_mode=False and compiled!")
+    except Exception as e2:
+        print(f"Error loading model with safe_mode=False: {e2}")
+        model = None
 
 # Class names
 class_names = [

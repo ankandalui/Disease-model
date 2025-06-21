@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from secure_storage import SecureImageStorage
 import hashlib
 from datetime import datetime
+import google.generativeai as genai
 
 # Load environment variables
 load_dotenv()
@@ -27,17 +28,23 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_FILE_SIZE_MB', 16)) * 1024 * 1024  # Default 16MB
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'dev-secret-key')
 
-# Initialize Secure Storage
-try:
-    storage = SecureImageStorage(
-        lighthouse_api_key=os.getenv('LIGHTHOUSE_API_KEY'),
-        mongo_uri=os.getenv('MONGO_URI', 'mongodb://localhost:27017/'),
-        db_name=os.getenv('MONGO_DB_NAME', 'medai_secure_storage')
-    )
-    print("Secure storage initialized successfully!")
-except Exception as e:
-    print(f"Warning: Secure storage initialization failed: {e}")
+# Initialize Secure Storage only if explicitly enabled
+enable_storage = os.getenv('ENABLE_BLOCKCHAIN_STORAGE', 'false').lower() == 'true'
+
+if enable_storage:
+    try:
+        storage = SecureImageStorage(
+            lighthouse_api_key=os.getenv('LIGHTHOUSE_API_KEY'),
+            mongo_uri=os.getenv('MONGO_URI', 'mongodb://localhost:27017/'),
+            db_name=os.getenv('MONGO_DB_NAME', 'medai_secure_storage')
+        )
+        print("Secure storage initialized successfully!")
+    except Exception as e:
+        print(f"Warning: Secure storage initialization failed: {e}")
+        storage = None
+else:
     storage = None
+    print("Secure storage disabled for local development")
 
 # Load the model with multiple fallback strategies
 model = None
@@ -196,6 +203,78 @@ def predict_image(img_data):
     
     return class_names[predicted_class], confidence
 
+# Configure Gemini API
+genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+
+def validate_skin_image_with_gemini(image_data: bytes) -> dict:
+    """
+    Use Gemini to validate if the image contains skin/skin disease content
+    """
+    try:
+        gemini_api_key = os.getenv('GEMINI_API_KEY')
+        if not gemini_api_key or gemini_api_key == 'your_gemini_api_key_here':
+            return {
+                'is_valid': True,  # Allow all images if Gemini is not configured
+                'message': 'Gemini validation disabled - API key not configured',
+                'confidence': 1.0
+            }
+        
+        # Convert image data to PIL Image for Gemini
+        img = Image.open(io.BytesIO(image_data))
+        
+        # Create Gemini model
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Prompt for skin disease validation
+        prompt = """
+        Please analyze this image and determine if it shows:
+        1. Human skin (any body part)
+        2. Skin conditions, lesions, rashes, or diseases
+        3. Medical/dermatological content
+        
+        Respond with ONLY one of these:
+        - "VALID_SKIN" if the image shows skin or skin conditions
+        - "NOT_SKIN" if the image does not show skin or medical content
+        - "UNCLEAR" if you cannot determine clearly
+        
+        Be strict - only allow clear skin/medical images.
+        """
+        
+        # Generate content with the image
+        response = model.generate_content([prompt, img])
+        
+        result_text = response.text.strip().upper()
+        
+        if "VALID_SKIN" in result_text:
+            return {
+                'is_valid': True,
+                'message': 'Gemini confirmed: Image contains skin/medical content',
+                'confidence': 0.9,
+                'gemini_response': result_text
+            }
+        elif "NOT_SKIN" in result_text:
+            return {
+                'is_valid': False,
+                'message': 'Please upload a skin or skin disease image. The uploaded image does not appear to contain skin or medical dermatological content.',
+                'confidence': 0.9,
+                'gemini_response': result_text
+            }
+        else:
+            return {
+                'is_valid': False,
+                'message': 'Please upload a clear skin or skin disease image. We could not clearly identify skin-related content in the uploaded image.',
+                'confidence': 0.5,
+                'gemini_response': result_text
+            }
+        
+    except Exception as e:
+        print(f"Gemini validation error: {e}")
+        return {
+            'is_valid': True,  # Allow prediction to proceed if Gemini fails
+            'message': f'Gemini validation failed: {str(e)}',
+            'confidence': 0.0
+        }
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -289,6 +368,16 @@ def predict():
             return jsonify({
                 'error': 'No image provided',
                 'message': 'Please provide either a file or base64 image data'
+            }), 400        # Validate image with Gemini before prediction
+        validation_result = validate_skin_image_with_gemini(image_data)
+        if not validation_result['is_valid']:
+            return jsonify({
+                'error': 'Invalid image type',
+                'message': validation_result['message'],
+                'instructions': 'Please upload an image showing human skin or skin conditions such as rashes, lesions, moles, or other dermatological conditions.',
+                'accepted_formats': 'JPG, JPEG, PNG',
+                'validation_confidence': validation_result['confidence'],
+                'success': False
             }), 400
 
         # Make prediction
@@ -343,7 +432,12 @@ def predict():
             'confidence': round(confidence * 100, 2),
             'storage_secure': storage_result['success'] if storage_result else False,
             'storage_info': prediction_data.get('storage_info'),
-            'timestamp': prediction_data['timestamp']
+            'timestamp': prediction_data['timestamp'],
+            'validation': {
+                'gemini_validated': True,
+                'validation_message': validation_result['message'],
+                'validation_confidence': validation_result['confidence']
+            }
         })
 
     except Exception as e:

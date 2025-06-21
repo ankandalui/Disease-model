@@ -1,0 +1,24 @@
+# Copy these environment variables to your Render dashboard
+# Go to your service settings -> Environment tab
+
+# Required - Replace with your actual values
+LIGHTHOUSE_API_KEY=7b146688.fc67f2808630406ba32be48e442b7f7f
+MONGO_URI=mongodb+srv://sutapak2903:mTSMDqu5lv94qEae@cluster0.gxohtww.mongodb.net/medai?retryWrites=true&w=majority&appName=MedAI
+MONGO_DB_NAME=medai_secure_storage
+FLASK_SECRET_KEY=prod-secret-key-change-this-in-production-12345
+
+# Optional - Update as needed
+MAX_FILE_SIZE_MB=16
+MODEL_VERSION=v1.0
+FLASK_ENV=production
+DEBUG=false
+LOG_LEVEL=INFO
+RATE_LIMIT_PER_MINUTE=60
+ENABLE_BLOCKCHAIN_STORAGE=true
+ENABLE_MONGODB_BACKUP=true
+IPFS_GATEWAY_URL=https://gateway.lighthouse.storage/ipfs/
+
+# IMPORTANT: Replace 'your-frontend-domain' with your actual frontend URL
+# Example: If your frontend is at https://med-ai-frontend.onrender.com
+# Then set: CORS_ORIGINS=http://localhost:3000,https://med-ai-frontend.onrender.com
+CORS_ORIGINS=http://localhost:3000,https://med-ai-first.vercel.app

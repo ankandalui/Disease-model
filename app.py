@@ -168,11 +168,24 @@ def predict_image(img_data):
     """
     Predict from image data (either file path or PIL Image)
     """
+    # Always use Keras preprocessing for consistency with HTML Flask app
     if isinstance(img_data, str):  # file path
         img = image.load_img(img_data, target_size=(224, 224))
-    else:  # PIL Image
-        img = img_data.resize((224, 224))
+    else:  # PIL Image - save temporarily and reload with Keras
+        # Save PIL image temporarily
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
+            img_data.save(tmp_file.name, 'JPEG')
+            tmp_path = tmp_file.name
+        
+        # Load with Keras preprocessing (same as HTML Flask app)
+        img = image.load_img(tmp_path, target_size=(224, 224))
+        
+        # Clean up temporary file
+        import os
+        os.unlink(tmp_path)
     
+    # Use identical preprocessing as HTML Flask app
     img_array = image.img_to_array(img)
     img_array = np.expand_dims(img_array, axis=0)
     img_array = img_array / 255.0  # Normalize

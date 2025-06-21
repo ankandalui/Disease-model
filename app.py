@@ -39,27 +39,112 @@ except Exception as e:
     print(f"Warning: Secure storage initialization failed: {e}")
     storage = None
 
-# Load the model
+# Load the model with multiple fallback strategies
+model = None
+model_error = None
+
+print("🔍 Starting model loading diagnostics...")
+
+# Check environment and file system first
 try:
-    # Try loading with compile=False to avoid compatibility issues
-    model = load_model('best_model.keras', compile=False)
+    import os
+    import tensorflow as tf
+    print(f"📊 TensorFlow version: {tf.__version__}")
+    print(f"📊 Python version: {os.sys.version}")
+    print(f"📂 Current directory: {os.getcwd()}")
+    print(f"📂 Directory contents: {os.listdir('.')}")
     
-    # Manually compile the model for inference
-    if model is not None:
-        model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-        print("Model loaded and compiled successfully!")
-    
+    if os.path.exists('best_model.keras'):
+        file_size = os.path.getsize('best_model.keras')
+        print(f"✅ Model file found: best_model.keras ({file_size:,} bytes)")
+    else:
+        print("❌ Model file 'best_model.keras' not found!")
+        print("📂 Looking for alternative model files...")
+        model_files = [f for f in os.listdir('.') if f.endswith(('.keras', '.h5', '.pb'))]
+        print(f"📂 Found model files: {model_files}")
+        
 except Exception as e:
-    print(f"Error loading model with compile=False: {e}")
+    print(f"❌ Environment check failed: {e}")
+
+print("\n🔄 Attempting to load model...")
+
+# Strategy 1: Load with compile=False
+try:
+    print("📝 Strategy 1: Loading with compile=False...")
+    model = load_model('best_model.keras', compile=False)
+    if model is not None:
+        print("📝 Manually compiling model...")
+        model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+        print("✅ Model loaded and compiled successfully!")
+        
+        # Test prediction to ensure model works
+        import numpy as np
+        test_input = np.random.random((1, 224, 224, 3))
+        test_pred = model.predict(test_input, verbose=0)
+        print(f"✅ Model test prediction successful! Output shape: {test_pred.shape}")
+        
+except Exception as e:
+    print(f"❌ Strategy 1 failed: {e}")
+    model_error = str(e)
+    model = None
+
+# Strategy 2: Load with safe_mode=False if Strategy 1 fails
+if model is None:
     try:
-        # Fallback: try with custom_objects and safe_mode
+        print("📝 Strategy 2: Loading with safe_mode=False...")
         model = load_model('best_model.keras', compile=False, safe_mode=False)
         if model is not None:
             model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-            print("Model loaded successfully with safe_mode=False and compiled!")
-    except Exception as e2:
-        print(f"Error loading model with safe_mode=False: {e2}")
-        model = None
+            print("✅ Model loaded with safe_mode=False and compiled!")
+    except Exception as e:
+        print(f"❌ Strategy 2 failed: {e}")
+        model_error = str(e)
+
+# Strategy 3: Try loading as H5 format if available
+if model is None:
+    try:
+        print("📝 Strategy 3: Looking for H5 format...")
+        import os
+        if os.path.exists('best_model.h5'):
+            model = load_model('best_model.h5')
+            print("✅ Model loaded from H5 format!")
+        else:
+            print("❌ No H5 model file found")
+    except Exception as e:
+        print(f"❌ Strategy 3 (H5) failed: {e}")
+        model_error = str(e)
+
+# Strategy 4: Try with custom objects (in case of custom layers)
+if model is None:
+    try:
+        print("📝 Strategy 4: Loading with custom_objects...")
+        custom_objects = {'tf': tf}  # Add TensorFlow to custom objects
+        model = load_model('best_model.keras', custom_objects=custom_objects, compile=False)
+        if model is not None:
+            model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+            print("✅ Model loaded with custom_objects!")
+    except Exception as e:
+        print(f"❌ Strategy 4 failed: {e}")
+        model_error = str(e)
+
+# Final status
+if model is None:
+    print("\n🚨 CRITICAL: Model could not be loaded with any strategy")
+    print(f"🔧 Final error: {model_error}")
+    print("🔧 The API will run but predictions will return errors")
+else:
+    print(f"\n🎉 SUCCESS: Model loaded successfully!")
+    try:
+        print(f"📊 Model summary: {model.count_params():,} parameters")
+        # Test the model with a dummy prediction to ensure it works
+        import numpy as np
+        test_input = np.random.random((1, 224, 224, 3))
+        test_prediction = model.predict(test_input, verbose=0)
+        print(f"✅ Model test successful! Output shape: {test_prediction.shape}")
+    except Exception as e:
+        print(f"⚠️ Model loaded but test prediction failed: {e}")
+
+print("\n" + "="*50)
 
 # Class names
 class_names = [
@@ -104,9 +189,12 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'model_loaded': model is not None,
+        'model_error': model_error if model is None else None,
         'storage_available': storage is not None,
         'version': os.getenv('MODEL_VERSION', 'v1.0'),
         'message': 'Flask API is running',
+        'tensorflow_version': __import__('tensorflow').__version__,
+        'python_version': __import__('sys').version,
         'timestamp': datetime.utcnow().isoformat()
     })
 
@@ -125,7 +213,9 @@ def predict():
         if model is None:
             return jsonify({
                 'error': 'Model not loaded',
-                'message': 'The ML model could not be loaded'
+                'message': f'The ML model could not be loaded. Error: {model_error}',
+                'success': False,
+                'model_status': 'unavailable'
             }), 500
 
         image_data = None
